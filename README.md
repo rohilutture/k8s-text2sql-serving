@@ -1,9 +1,35 @@
 # Text-to-SQL serving on Kubernetes: autoscaling, load testing, and a GPU deployment spec
 
-Status: **the Kubernetes behaviour (probes, HPA, rollouts, load shedding) was run for real on a local `kind`
-cluster with a CPU "mock" backend, and measured. The GPU/vLLM deployment and the Terraform for GKE were only
-validated offline: nothing was ever applied to a cloud account, no GPU served a request, and no cloud
-latency, cost, or uptime was measured.**
+Status: **the Kubernetes behaviour (probes, HPA, rollouts, load shedding) was run for real twice with a CPU "mock"
+backend: on a local `kind` cluster, and on a real Google Kubernetes Engine (GKE) cluster for about 50 minutes (then
+deleted). The GPU/vLLM deployment and the Terraform GKE module were only validated offline: they were never applied
+(the cloud run used `gcloud` and `kubectl`), and no GPU served a request.**
+
+## Cloud run on GKE (CPU mock backend, single runs; `results/cloud/`, overlay `k8s/overlays/cloud-gke-cpu`, script `scripts/run_cloud_experiments.sh`)
+
+Setup: zonal GKE Standard cluster in us-central1-a, 3 `e2-standard-4` nodes (node autoscaler allowed up to 5 but never
+needed: seven gateway pods fit on 3 nodes), gateway image from Artifact Registry, HPA 1 to 8 replicas at 60% CPU, a public
+LoadBalancer restricted to the test machine's IP. The load generator ran on a home PC across the internet, so every
+client-side latency includes about 100 ms of network overhead (idle requests with a fresh connection: p50 125 ms, against
+about 22 ms of server time). Read scaling and shedding behaviour, not absolute latency. Cost: about 50 minutes of a
+3-node cluster plus a load balancer, a couple of dollars; everything was deleted afterwards (verified: no clusters,
+VMs, disks, addresses, forwarding rules or registries left).
+
+| Experiment | Requests | OK | Shed (503) | Connection errors | Notes |
+|---|---|---|---|---|---|
+| HPA step, fresh connection per request (20 to 120 to 40 load stages) | 5,034 | 88.2% | 593 | 1 | HPA scaled 1 to 4 pods by t=55 s and 7 by t=85 s; 503s stopped once 4 pods were ready; client p50 returned to about 121 ms (the network floor) |
+| HPA step, keep-alive clients | 5,034 | 56.1% | 2,202 | 7 | pods rose to 3 to 4 but shedding continued for the whole 100 s overload: connections pinned to the first pods |
+| Pod kill under 60 rps | 1,779 | 82.9% | 305 | 0 | see caveat |
+| Rolling restart under 60 rps | 1,779 | 78.7% | 379 | 0 | see caveat |
+
+- **Connection pinning reproduced on GKE.** With keep-alive clients the autoscaler added pods but traffic did not spread
+  to them, as in the local kind run; with a new connection per request the load spread and shedding stopped.
+- **Caveat on the pod-kill and rolling-restart rows:** these runs started from one replica at 60 rps, so the service was
+  already overloaded and shedding (17 to 21%) before the HPA reacted; the 503s are mostly that overload, not the disruption.
+  Zero connection errors shows the kill/restart did not break connections, but these cloud runs do not isolate the
+  disruption cleanly (the earlier local run started from 6 ready pods). Do not cite them as a clean zero-downtime proof.
+- Single run each, one load-generating machine, mock CPU backend (20 ms of CPU burned per request), so none of this says anything
+  about GPU inference or real model latency.
 
 ## What exists
 
@@ -120,5 +146,5 @@ has ~15 ms resolution on Windows (the mock uses it only on Linux).
 - Safe: "deployed a containerized inference gateway to Kubernetes (local kind) with HPA, PDB, probes and load
   shedding; load-tested with an open-loop generator; found and demonstrated that keep-alive clients pin traffic to
   one pod and defeat scale-out; validated Terraform and a GPU vLLM overlay offline."
-- Never claim a cloud deployment, GPU serving, real model latency, or uptime. Name the backend ("CPU mock") and
+- Never claim GPU serving, real model latency, or uptime; a real GKE cloud run exists but only for the CPU mock backend (see the cloud run section). Name the backend ("CPU mock") and
   the environment ("local kind, one machine") with every number.

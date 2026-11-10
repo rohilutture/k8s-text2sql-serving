@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 1
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+spec:
+  minReplicas: 1
+  maxReplicas: 8      # capped on purpose: bounds cost (the node pool autoscaler is capped at 5 nodes as well)

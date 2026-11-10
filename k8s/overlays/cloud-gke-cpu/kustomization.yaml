@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# GKE overlay for the CPU "mock" backend: same experiments as the local kind cluster, on real GKE nodes. No GPU, no vLLM.
+# Replace PROJECT_ID with yours. The public LoadBalancer is created WITHOUT an open source range on purpose: after apply,
+# restrict it to your own address (see scripts/cloud_up.ps1: `kubectl patch svc gateway ... loadBalancerSourceRanges`).
+resources:
+  - ../../base
+patches:
+  - path: patches.yaml
+  - target: {kind: Service, name: gateway}
+    patch: |-
+      - {op: add, path: /spec/type, value: LoadBalancer}
+      - {op: add, path: /spec/loadBalancerSourceRanges, value: ["127.0.0.1/32"]}
+images:
+  - name: sql-gateway
+    newName: us-central1-docker.pkg.dev/PROJECT_ID/sql-serving/gateway
+    newTag: v1
+configMapGenerator:
+  - name: gateway-config
+    behavior: merge
+    literals:
+      - BACKEND=mock
+      - MOCK_CPU_MS=20
+      - WARMUP_SECONDS=3
+      - MAX_INFLIGHT=16
