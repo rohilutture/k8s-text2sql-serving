@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard-rwo     # GKE's default persistent-disk class
+  resources:
+    requests: {storage: 30Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels: {app: vllm}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate                   # one GPU per pod: a surge pod could not schedule, so replace in place
+  selector:
+    matchLabels: {app: vllm}
+  template:
+    metadata:
+      labels: {app: vllm}
+    spec:
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-l4
+      tolerations:
+        - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.10.1     # PIN to the version you have tested; verify this tag exists
+          args:
+            - --model=Qwen/Qwen2.5-Coder-1.5B-Instruct   # swap for your merged fine-tuned model
+            - --served-model-name=text-to-sql
+            - --max-model-len=4096
+            - --gpu-memory-utilization=0.90
+            - --enable-prefix-caching        # the schema is most of every prompt: prefix caching is the big win
+          ports:
+            - {name: http, containerPort: 8000}
+          env:
+            - {name: HF_HOME, value: /models}
+          resources:
+            requests: {cpu: "2", memory: 12Gi}
+            limits: {memory: 16Gi, nvidia.com/gpu: 1}
+          volumeMounts:
+            - {name: model-cache, mountPath: /models}
+            - {name: shm, mountPath: /dev/shm}
+          startupProbe:                      # model download + load can take many minutes on a cold node
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim: {claimName: model-cache}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  labels: {app: vllm}
+spec:
+  selector: {app: vllm}
+  ports:
+    - {name: http, port: 8000, targetPort: http}

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  labels: {app: gateway}
+spec:
+  replicas: 2            # the HPA owns the replica count once it exists; this is only the initial value
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: {app: gateway}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}   # never drop below the current ready count during a rollout
+  template:
+    metadata:
+      labels: {app: gateway}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: gateway}
+      containers:
+        - name: gateway
+          image: sql-gateway:dev
+          ports:
+            - {name: http, containerPort: 8000}
+          envFrom:
+            - configMapRef: {name: gateway-config}
+          resources:
+            # the HPA's CPU utilisation is measured against the REQUEST, so it is set to what one pod really uses at
+            # a sensible load, and the limit leaves headroom for bursts while the autoscaler reacts
+            requests: {cpu: 250m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:                       # generous: the vLLM overlay's gateway waits on a slow model load
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:                      # process-only: must NOT depend on the backend (no restart storms)
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:                     # warmed up + backend healthy; failing it removes the pod from the Service
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            preStop:                          # keep serving while endpoints propagate, then SIGTERM triggers graceful drain
+              exec: {command: ["python", "-c", "import time; time.sleep(5)"]}

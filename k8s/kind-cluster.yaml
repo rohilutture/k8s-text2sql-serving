@@ -1,0 +1,10 @@
+# Local multi-node cluster for the experiments. Host port 30080 maps to the gateway's NodePort.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - {containerPort: 30080, hostPort: 30080, listenAddress: "127.0.0.1", protocol: TCP}
+  - role: worker
+  - role: worker
+  - role: worker

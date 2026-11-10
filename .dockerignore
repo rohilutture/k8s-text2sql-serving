@@ -1,0 +1,10 @@
+.venv
+tests
+loadtest
+results
+terraform
+k8s
+scripts
+__pycache__
+*.pyc
+.pytest_cache

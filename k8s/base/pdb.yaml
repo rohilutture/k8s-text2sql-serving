@@ -1,0 +1,8 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+spec:
+  minAvailable: 1       # a node drain or upgrade may never take the last ready gateway pod
+  selector:
+    matchLabels: {app: gateway}

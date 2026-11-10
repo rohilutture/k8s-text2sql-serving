@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# GKE overlay: the gateway proxies to a GPU-backed vLLM server. NOT APPLIED to a real cluster; validated against an
+# API server's schema only (see README). Replace PROJECT_ID / region / tag with your values before use.
+resources:
+  - ../../base
+  - vllm.yaml
+patches:
+  - path: patches.yaml
+images:
+  - name: sql-gateway
+    newName: us-central1-docker.pkg.dev/PROJECT_ID/sql-serving/gateway
+    newTag: v1
+configMapGenerator:
+  - name: gateway-config
+    behavior: merge
+    literals:
+      - BACKEND=vllm
+      - VLLM_URL=http://vllm:8000
+      - MODEL_NAME=text-to-sql
+      - WARMUP_SECONDS=0
+      - REQUEST_TIMEOUT=60
+      - MAX_INFLIGHT=64
